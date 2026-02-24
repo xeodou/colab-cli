@@ -1,0 +1,77 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"time"
+)
+
+func runUpload(args []string) error {
+	jsonOutput := hasFlag(args, "--json")
+	gpu := getFlagValue(args, "--gpu", "t4")
+
+	positional := positionalArgs(args, "--gpu")
+
+	if len(positional) < 1 {
+		return fmt.Errorf("usage: colab upload <local-file> [remote-path]")
+	}
+
+	localPath := positional[0]
+	remotePath := ""
+	if len(positional) > 1 {
+		remotePath = positional[1]
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	tok, err := getToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	client := NewColabClient(tok.AccessToken)
+
+	if !jsonOutput {
+		fmt.Println("Connecting to runtime...")
+	}
+
+	rt, err := client.AssignRuntime(ctx, gpu)
+	if err != nil {
+		return fmt.Errorf("assign runtime: %w", err)
+	}
+	defer func() {
+		// Don't release runtime after upload - user might want to exec next
+	}()
+
+	fc := NewFileClient(rt)
+
+	if !jsonOutput {
+		fmt.Printf("Uploading %s...\n", filepath.Base(localPath))
+	}
+
+	if err := fc.Upload(ctx, localPath, remotePath); err != nil {
+		return fmt.Errorf("upload: %w", err)
+	}
+
+	dest := remotePath
+	if dest == "" {
+		dest = filepath.Base(localPath)
+	}
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"status": "uploaded",
+			"local":  localPath,
+			"remote": dest,
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+	} else {
+		fmt.Printf("Uploaded: %s -> %s\n", localPath, dest)
+	}
+
+	return nil
+}
