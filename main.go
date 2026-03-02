@@ -20,6 +20,8 @@ func main() {
 	switch cmd {
 	case "auth":
 		err = runAuth(args)
+	case "start":
+		err = runStart(args)
 	case "exec":
 		err = runExec(args)
 	case "upload":
@@ -53,11 +55,12 @@ func printUsage() {
 
 Commands:
   auth                  Authenticate with Google (OAuth2 browser flow)
+  start                 Start a GPU runtime and print the session ID
   exec <file>           Execute .py or .ipynb on Colab GPU
   exec -c "code"        Execute inline Python code on Colab GPU
-  quota                 Show GPU quota, CCU balance, eligible accelerators
   upload <local> [remote]   Upload file to Colab runtime
   download <remote> [local] Download file from Colab runtime
+  quota                 Show GPU quota, CCU balance, eligible accelerators
   status                Show runtime info (GPU, memory, idle time)
   stop                  Release the Colab runtime
 
@@ -65,18 +68,20 @@ Options:
   --json                Machine-readable JSON output
   --gpu t4|l4|a100      GPU type (default: t4)
   --timeout 30m         Execution timeout (default: 30m)
+  --session <id>        Use a specific runtime session
   -h, --help            Show this help
   -v, --version         Show version
 
 Examples:
-  colab auth
-  colab quota
-  colab exec train.py
-  colab exec notebook.ipynb
+  colab exec train.py                          # one-shot: assign, run, release
+  colab exec --gpu a100 train.py               # one-shot with A100
   colab exec -c "import torch; print(torch.cuda.get_device_name(0))"
-  colab exec --gpu a100 train.py
-  colab upload data.zip
-  colab download output/model.bin ./model.bin
-  colab stop
+
+  # Long-running session:
+  colab start --gpu t4                         # → prints session ID
+  colab upload --session <id> data.tar.gz      # upload to that runtime
+  colab exec --session <id> train.py           # run on that runtime
+  colab download --session <id> model.bin      # download results
+  colab stop                                   # release when done
 `)
 }

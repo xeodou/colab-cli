@@ -11,8 +11,9 @@ import (
 func runDownload(args []string) error {
 	jsonOutput := hasFlag(args, "--json")
 	gpu := getFlagValue(args, "--gpu", "t4")
+	session := getFlagValue(args, "--session", "")
 
-	positional := positionalArgs(args, "--gpu")
+	positional := positionalArgs(args, "--gpu", "--session")
 
 	if len(positional) < 1 {
 		return fmt.Errorf("usage: colab download <remote-path> [local-path]")
@@ -38,18 +39,28 @@ func runDownload(args []string) error {
 		fmt.Println("Connecting to runtime...")
 	}
 
-	rt, err := client.AssignRuntime(ctx, gpu)
+	var rt *Runtime
+	if session != "" {
+		rt, err = client.ResumeRuntime(ctx, gpu, session)
+	} else {
+		rt, err = client.AssignRuntime(ctx, gpu)
+	}
 	if err != nil {
 		return fmt.Errorf("assign runtime: %w", err)
 	}
 
-	fc := NewFileClient(rt)
+	// Connect to kernel for reliable file download
+	kc, err := NewKernelClient(ctx, rt)
+	if err != nil {
+		return fmt.Errorf("connect kernel: %w", err)
+	}
+	defer kc.Close()
 
 	if !jsonOutput {
 		fmt.Printf("Downloading %s...\n", remotePath)
 	}
 
-	if err := fc.Download(ctx, remotePath, localPath); err != nil {
+	if err := KernelDownload(ctx, kc, remotePath, localPath); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
 

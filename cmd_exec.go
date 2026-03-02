@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,6 +17,7 @@ func runExec(args []string) error {
 	gpu := getFlagValue(args, "--gpu", "t4")
 	timeoutStr := getFlagValue(args, "--timeout", "30m")
 	inlineCode := getFlagValue(args, "-c", "")
+	session := getFlagValue(args, "--session", "")
 
 	timeout, err := time.ParseDuration(timeoutStr)
 	if err != nil {
@@ -39,7 +39,7 @@ func runExec(args []string) error {
 				skipNext = false
 				continue
 			}
-			if arg == "--gpu" || arg == "--timeout" || arg == "-c" {
+			if arg == "--gpu" || arg == "--timeout" || arg == "-c" || arg == "--session" {
 				skipNext = true
 				continue
 			}
@@ -90,51 +90,56 @@ func runExec(args []string) error {
 
 	client := NewColabClient(tok.AccessToken)
 
-	// Assign runtime
-	if !jsonOutput {
-		fmt.Printf("Requesting %s GPU runtime...\n", strings.ToUpper(gpu))
+	// Get runtime: resume specific session or assign fresh
+	var rt *Runtime
+	if session != "" {
+		if !jsonOutput {
+			fmt.Printf("Connecting to session %s...\n", session)
+		}
+		rt, err = client.ResumeRuntime(ctx, gpu, session)
+	} else {
+		if !jsonOutput {
+			fmt.Printf("Requesting %s GPU runtime...\n", strings.ToUpper(gpu))
+		}
+		rt, err = client.AssignRuntime(ctx, gpu)
 	}
-
-	rt, err := client.AssignRuntime(ctx, gpu)
 	if err != nil {
 		return fmt.Errorf("assign runtime: %w", err)
 	}
 
-	// Ensure cleanup on exit (sync.Once prevents double-release from defer + signal)
-	var cleanupOnce sync.Once
-	cleanup := func() {
-		cleanupOnce.Do(func() {
-			if !jsonOutput {
-				fmt.Println("\nReleasing runtime...")
-			}
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cleanCancel()
-			_ = client.UnassignRuntime(cleanCtx, rt)
-		})
-	}
+	// Without --session: release runtime on exit (fresh environment each time)
+	// With --session: keep runtime alive for reuse
+	if session == "" {
+		var cleanupOnce sync.Once
+		cleanup := func() {
+			cleanupOnce.Do(func() {
+				if !jsonOutput {
+					fmt.Println("\nReleasing runtime...")
+				}
+				cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanCancel()
+				_ = client.UnassignRuntime(cleanCtx, rt)
+			})
+		}
 
-	go func() {
-		<-sigCh
-		cleanup()
-		os.Exit(130)
-	}()
-	defer cleanup()
+		go func() {
+			<-sigCh
+			cleanup()
+			os.Exit(130)
+		}()
+		defer cleanup()
+	} else {
+		go func() {
+			<-sigCh
+			if rt.cancel != nil {
+				rt.cancel()
+			}
+			os.Exit(130)
+		}()
+	}
 
 	if !jsonOutput {
-		fmt.Printf("Runtime assigned: %s (%s)\n", rt.Accelerator, rt.Endpoint)
-	}
-
-	// If executing a .py file (not notebook), upload it first
-	if filename != "" && !isNotebook {
-		if !jsonOutput {
-			fmt.Printf("Uploading %s...\n", filepath.Base(filename))
-		}
-		fc := NewFileClient(rt)
-		remoteName := filepath.Base(filename)
-		if err := fc.Upload(ctx, filename, remoteName); err != nil {
-			return fmt.Errorf("upload file: %w", err)
-		}
-		codeCells = []string{fmt.Sprintf("exec(open(%q).read())", remoteName)}
+		fmt.Printf("Runtime: %s (%s)\n", rt.Accelerator, rt.Endpoint)
 	}
 
 	// Connect to kernel

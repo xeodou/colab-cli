@@ -11,8 +11,9 @@ import (
 func runUpload(args []string) error {
 	jsonOutput := hasFlag(args, "--json")
 	gpu := getFlagValue(args, "--gpu", "t4")
+	session := getFlagValue(args, "--session", "")
 
-	positional := positionalArgs(args, "--gpu")
+	positional := positionalArgs(args, "--gpu", "--session")
 
 	if len(positional) < 1 {
 		return fmt.Errorf("usage: colab upload <local-file> [remote-path]")
@@ -38,21 +39,28 @@ func runUpload(args []string) error {
 		fmt.Println("Connecting to runtime...")
 	}
 
-	rt, err := client.AssignRuntime(ctx, gpu)
+	var rt *Runtime
+	if session != "" {
+		rt, err = client.ResumeRuntime(ctx, gpu, session)
+	} else {
+		rt, err = client.AssignRuntime(ctx, gpu)
+	}
 	if err != nil {
 		return fmt.Errorf("assign runtime: %w", err)
 	}
-	defer func() {
-		// Don't release runtime after upload - user might want to exec next
-	}()
 
-	fc := NewFileClient(rt)
+	// Connect to kernel for reliable file upload
+	kc, err := NewKernelClient(ctx, rt)
+	if err != nil {
+		return fmt.Errorf("connect kernel: %w", err)
+	}
+	defer kc.Close()
 
 	if !jsonOutput {
 		fmt.Printf("Uploading %s...\n", filepath.Base(localPath))
 	}
 
-	if err := fc.Upload(ctx, localPath, remotePath); err != nil {
+	if err := KernelUpload(ctx, kc, localPath, remotePath); err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
 
