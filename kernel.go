@@ -128,7 +128,26 @@ func NewKernelClient(ctx context.Context, rt *Runtime) (*KernelClient, error) {
 		return nil, fmt.Errorf("kernel not ready: %w", err)
 	}
 
+	// Start ping keepalive to prevent idle disconnection
+	go kc.pingLoop(ctx)
+
 	return kc, nil
+}
+
+// pingLoop sends periodic pings to keep the WebSocket alive.
+func (kc *KernelClient) pingLoop(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := kc.conn.Ping(ctx); err != nil {
+				return
+			}
+		}
+	}
 }
 
 // waitReady sends a kernel_info_request and waits for the reply.
